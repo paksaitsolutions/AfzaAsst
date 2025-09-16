@@ -639,6 +639,7 @@ def render_control_panel():
     st.markdown('<div class="section"><div class="section-title">⚡ Quick Actions</div>', unsafe_allow_html=True)
     if st.button("🗑️ Clear Chat History", width='stretch'):
         st.session_state.chat_history = []
+        st.success("Chat history cleared!")
     
     if st.button("💾 Save Chat History", width='stretch'):
         if st.session_state.chat_history:
@@ -708,6 +709,10 @@ def render_main_content():
 def render_chat_mode():
     st.subheader("💬 AfzaAssistant Chat")
     
+    # Ensure chat_history is always a list
+    if not isinstance(st.session_state.chat_history, list):
+        st.session_state.chat_history = []
+    
     # Handle selected prompt
     if st.session_state.get('selected_prompt'):
         prompt = st.session_state.selected_prompt
@@ -731,18 +736,21 @@ def render_chat_mode():
     
     with chat_container:
         for message in st.session_state.chat_history:
-            if message["role"] == "user":
-                st.markdown(f"""
-                <div class="chat-message user-message">
-                    <strong>You:</strong> {message["content"]}
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown(f"""
-                <div class="chat-message ai-message">
-                    <strong>AI:</strong> {message["content"]}
-                </div>
-                """, unsafe_allow_html=True)
+            # Handle both dict and string formats for backward compatibility
+            if isinstance(message, dict):
+                if message["role"] == "user":
+                    st.markdown(f"""
+                    <div class="chat-message user-message">
+                        <strong>You:</strong> {message["content"]}
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div class="chat-message ai-message">
+                        <strong>AI:</strong> {message["content"]}
+                    </div>
+                    """, unsafe_allow_html=True)
+
     
     # Chat input
     with st.form("chat_form", clear_on_submit=True):
@@ -1133,10 +1141,12 @@ def render_gallery_mode():
             chat_history = st.session_state.get('chat_history', [])
             if isinstance(chat_history, list) and chat_history:
                 for message in chat_history[-10:]:
-                    if message["role"] == "user":
-                        st.markdown(f"**You:** {message['content']}")
-                    else:
-                        st.markdown(f"**AI:** {message['content']}")
+                    if isinstance(message, dict):
+                        if message["role"] == "user":
+                            st.markdown(f"**You:** {message['content']}")
+                        else:
+                            st.markdown(f"**AI:** {message['content']}")
+
                     st.markdown("---")
             else:
                 st.info("No chat history yet. Start a conversation in Chat mode!")
