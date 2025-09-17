@@ -472,7 +472,13 @@ class LocalAIAssistant:
     
     def use_cloud_model(self):
         """Check if running on cloud platform"""
-        return os.getenv('STREAMLIT_SHARING_MODE') or 'streamlit.io' in os.getenv('HOSTNAME', '')
+        return (
+            os.getenv('STREAMLIT_SHARING_MODE') or 
+            'streamlit.io' in os.getenv('HOSTNAME', '') or
+            'streamlit' in os.getenv('SERVER_NAME', '') or
+            os.path.exists('/.streamlit') or
+            not os.path.exists('/usr/local/bin/ollama')
+        )
     
     def chat_with_transformers(self, message):
         """Chat using Hugging Face transformers"""
@@ -483,17 +489,32 @@ class LocalAIAssistant:
             
             # Use cached model
             if not hasattr(self, 'chat_model'):
-                self.chat_model = pipeline(
-                    "text-generation",
-                    model="microsoft/DialoGPT-small",
-                    tokenizer="microsoft/DialoGPT-small",
-                    device=-1  # CPU only
-                )
+                with st.spinner("Loading AI model (first time only)..."):
+                    self.chat_model = pipeline(
+                        "text-generation",
+                        model="gpt2",  # Smaller, faster model
+                        device=-1,  # CPU only
+                        max_length=150
+                    )
             
-            response = self.chat_model(message, max_length=200, num_return_sequences=1)
-            return response[0]['generated_text']
+            # Generate response
+            prompt = f"Human: {message}\nAI:"
+            response = self.chat_model(
+                prompt, 
+                max_length=len(prompt.split()) + 50,
+                num_return_sequences=1,
+                temperature=0.7,
+                pad_token_id=50256,
+                do_sample=True
+            )
+            
+            # Extract only the AI response part
+            full_response = response[0]['generated_text']
+            ai_response = full_response.split("AI:")[-1].strip()
+            return ai_response if ai_response else "I'm here to help! Please ask me anything."
+            
         except Exception as e:
-            return f"AI temporarily unavailable: {str(e)}"
+            return f"AI temporarily unavailable: {str(e)}. Please try again."
     
     def auto_save_all(self):
         try:
@@ -521,33 +542,41 @@ class LocalAIAssistant:
 
 @st.cache_data(ttl=300)
 def check_ollama_connection_cached():
-    # Check if running on cloud first
-    if os.getenv('STREAMLIT_SHARING_MODE') or 'streamlit.io' in os.getenv('HOSTNAME', ''):
+    # Force cloud mode detection
+    is_cloud = (
+        os.getenv('STREAMLIT_SHARING_MODE') or 
+        'streamlit.io' in os.getenv('HOSTNAME', '') or
+        'streamlit' in os.getenv('SERVER_NAME', '') or
+        os.path.exists('/.streamlit') or
+        not os.path.exists('/usr/local/bin/ollama')
+    )
+    
+    if is_cloud:
         transformers = lazy_import('transformers')
         if transformers:
-            return True, "Cloud AI Model (Hugging Face)", ["DialoGPT-small"]
+            return True, "🌐 Cloud AI Model (Hugging Face)", ["DialoGPT-small"]
         else:
-            return False, "Add 'transformers' to requirements.txt", []
+            return False, "❌ Add 'transformers' to requirements.txt", []
     
-    # Local Ollama check
+    # Local Ollama check (only for local deployment)
     ollama = lazy_import('ollama')
     if not ollama:
         transformers = lazy_import('transformers')
         if transformers:
-            return True, "Fallback AI Model (Hugging Face)", ["DialoGPT-small"]
-        return False, "Install Ollama or add 'transformers' to requirements.txt", []
+            return True, "🔄 Fallback AI Model (Hugging Face)", ["DialoGPT-small"]
+        return False, "❌ Install Ollama or add 'transformers' to requirements.txt", []
     
     try:
         models = ollama.list()
         if not models or not models.get('models'):
-            return False, "No models installed. Run: ollama pull phi3", []
+            return False, "❌ No models installed. Run: ollama pull phi3", []
         model_names = [model['name'] for model in models['models']]
-        return True, f"Ollama - {len(model_names)} models available", model_names
+        return True, f"✅ Ollama - {len(model_names)} models available", model_names
     except Exception as e:
         transformers = lazy_import('transformers')
         if transformers:
-            return True, "Fallback AI Model (Hugging Face)", ["DialoGPT-small"]
-        return False, f"Ollama failed. Install transformers as fallback: {str(e)}", []
+            return True, "🔄 Fallback AI Model (Hugging Face)", ["DialoGPT-small"]
+        return False, f"❌ Ollama failed. Install transformers as fallback: {str(e)}", []
 
 @st.cache_resource
 def load_stable_diffusion_model():
