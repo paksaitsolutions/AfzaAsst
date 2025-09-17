@@ -1,12 +1,7 @@
 streamlit>=1.28.0
-requests>=2.31.0
-Pillow>=10.0.0
 transformers>=4.30.0
 torch>=2.0.0
-diffusers>=0.21.0
-accelerate>=0.20.0
+Pillow>=10.0.0
 openai-whisper>=20230314
 gtts>=2.3.0
-sounddevice>=0.4.6
-soundfile>=0.12.1
-ollama>=0.1.0
+requests>=2.31.0
