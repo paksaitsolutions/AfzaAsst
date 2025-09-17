@@ -1,0 +1,21 @@
+# Streamlit Cloud Optimized Requirements
+streamlit>=1.28.0
+transformers>=4.30.0
+torch>=2.0.0
+Pillow>=10.0.0
+openai-whisper>=20230314
+gtts>=2.3.0
+requests>=2.31.0
+
+# Optional: For image generation (may cause memory issues)
+# diffusers>=0.21.0
+# accelerate>=0.20.0
+
+# Optional: For API-based AI (recommended for production)
+# openai>=1.0.0
+# google-generativeai>=0.3.0
+
+# Not needed on cloud (local only)
+# sounddevice>=0.4.6
+# soundfile>=0.12.1
+# ollama>=0.1.0

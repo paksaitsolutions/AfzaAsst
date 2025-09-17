@@ -377,9 +377,14 @@ class LocalAIAssistant:
         return self.whisper_model is not None
     
     def chat(self, message, model=None):
+        # Try cloud-friendly models first
+        if self.use_cloud_model():
+            return self.chat_with_transformers(message)
+        
+        # Fallback to Ollama for local deployment
         ollama = lazy_import('ollama')
         if not ollama:
-            return "Error: Ollama not available"
+            return self.chat_with_transformers(message)
         
         if model is None:
             model = st.session_state.selected_model
@@ -387,31 +392,37 @@ class LocalAIAssistant:
             response = ollama.chat(
                 model=model,
                 messages=[
-                    {'role': 'system', 'content': 'You are an AI assistant. Provide clear, detailed, and helpful responses. Do not include your name in responses.'},
+                    {'role': 'system', 'content': 'You are an AI assistant. Provide clear, detailed, and helpful responses.'},
                     {'role': 'user', 'content': message}
                 ]
             )
             return response['message']['content']
         except Exception as e:
-            return f"Error: {str(e)}. Make sure Ollama is running and the model is installed."
+            return self.chat_with_transformers(message)
     
     def generate_image(self, prompt, width=512, height=512):
+        # Check dependencies first
+        if not lazy_import('diffusers') or not lazy_import('torch'):
+            return None, "Image generation requires diffusers and torch libraries"
+        
         pipeline = load_stable_diffusion_model()
         if not pipeline:
-            return None, "Image generation not available"
+            return None, "Failed to load image generation model. Check if dependencies are installed."
         
         try:
-            with st.spinner("Generating image (30-60 seconds on CPU)..."):
-                enhanced_prompt = f"{prompt}, high quality"
-                negative_prompt = "blurry, low quality"
+            with st.spinner("Generating image (this may take 1-2 minutes)..."):
+                enhanced_prompt = f"{prompt}, high quality, detailed"
+                negative_prompt = "blurry, low quality, distorted, ugly"
                 
+                # Use smaller settings for better performance on limited resources
                 image = pipeline(
                     prompt=enhanced_prompt,
                     negative_prompt=negative_prompt,
                     width=min(width, 512),
                     height=min(height, 512),
-                    num_inference_steps=10,
-                    guidance_scale=6.0
+                    num_inference_steps=15,  # Slightly more steps for better quality
+                    guidance_scale=7.5,
+                    generator=None  # For reproducible results, could add seed here
                 ).images[0]
                 
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -421,7 +432,7 @@ class LocalAIAssistant:
                 
                 return image, filepath
         except Exception as e:
-            return None, f"Image generation failed: {str(e)}"
+            return None, f"Image generation failed: {str(e)}. Try a simpler prompt or restart the app."
     
     def speech_to_text(self, audio_file):
         model = load_whisper_model_cached()
@@ -459,6 +470,31 @@ class LocalAIAssistant:
         
         return filepath
     
+    def use_cloud_model(self):
+        """Check if running on cloud platform"""
+        return os.getenv('STREAMLIT_SHARING_MODE') or 'streamlit.io' in os.getenv('HOSTNAME', '')
+    
+    def chat_with_transformers(self, message):
+        """Chat using Hugging Face transformers"""
+        try:
+            pipeline = lazy_import('transformers', 'pipeline')
+            if not pipeline:
+                return "AI chat requires transformers library. Add 'transformers' to requirements.txt"
+            
+            # Use cached model
+            if not hasattr(self, 'chat_model'):
+                self.chat_model = pipeline(
+                    "text-generation",
+                    model="microsoft/DialoGPT-small",
+                    tokenizer="microsoft/DialoGPT-small",
+                    device=-1  # CPU only
+                )
+            
+            response = self.chat_model(message, max_length=200, num_return_sequences=1)
+            return response[0]['generated_text']
+        except Exception as e:
+            return f"AI temporarily unavailable: {str(e)}"
+    
     def auto_save_all(self):
         try:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -485,22 +521,33 @@ class LocalAIAssistant:
 
 @st.cache_data(ttl=300)
 def check_ollama_connection_cached():
+    # Check if running on cloud first
+    if os.getenv('STREAMLIT_SHARING_MODE') or 'streamlit.io' in os.getenv('HOSTNAME', ''):
+        transformers = lazy_import('transformers')
+        if transformers:
+            return True, "Cloud AI Model (Hugging Face)", ["DialoGPT-small"]
+        else:
+            return False, "Add 'transformers' to requirements.txt", []
+    
+    # Local Ollama check
     ollama = lazy_import('ollama')
     if not ollama:
-        return False, "Ollama not installed", []
+        transformers = lazy_import('transformers')
+        if transformers:
+            return True, "Fallback AI Model (Hugging Face)", ["DialoGPT-small"]
+        return False, "Install Ollama or add 'transformers' to requirements.txt", []
     
     try:
         models = ollama.list()
         if not models or not models.get('models'):
             return False, "No models installed. Run: ollama pull phi3", []
         model_names = [model['name'] for model in models['models']]
-        return True, f"Connected - {len(model_names)} models available", model_names
+        return True, f"Ollama - {len(model_names)} models available", model_names
     except Exception as e:
-        try:
-            ollama.chat(model="phi3", messages=[{"role": "user", "content": "test"}])
-            return True, "Connected - Ollama is running", ["phi3", "llama3", "qwen:7b", "qwen3:8b"]
-        except:
-            return False, f"Ollama connection failed: {str(e)}", []
+        transformers = lazy_import('transformers')
+        if transformers:
+            return True, "Fallback AI Model (Hugging Face)", ["DialoGPT-small"]
+        return False, f"Ollama failed. Install transformers as fallback: {str(e)}", []
 
 @st.cache_resource
 def load_stable_diffusion_model():
@@ -511,18 +558,21 @@ def load_stable_diffusion_model():
         if not torch or not StableDiffusionPipeline:
             return None
         
+        # For Streamlit Cloud, use a smaller model or handle memory constraints
         pipeline = StableDiffusionPipeline.from_pretrained(
             "runwayml/stable-diffusion-v1-5",
             torch_dtype=torch.float32,
             safety_checker=None,
             requires_safety_checker=False,
-            use_safetensors=True
+            use_safetensors=True,
+            low_cpu_mem_usage=True
         )
         pipeline = pipeline.to("cpu")
         pipeline.enable_attention_slicing()
+        pipeline.enable_sequential_cpu_offload()
         return pipeline
     except Exception as e:
-        st.error(f"Failed to load image model: {str(e)}")
+        # Don't show error in UI here, let the calling function handle it
         return None
 
 @st.cache_resource
@@ -792,8 +842,28 @@ def render_chat_mode():
 def render_image_mode():
     st.subheader("🎨 AI Image Generation")
     
-    if not lazy_import('diffusers'):
-        st.error("Image generation requires diffusers library. Install with: pip install diffusers")
+    # Check for required libraries
+    diffusers_available = lazy_import('diffusers')
+    torch_available = lazy_import('torch')
+    
+    if not diffusers_available or not torch_available:
+        st.error("🚫 Image generation requires additional libraries")
+        st.markdown("""
+        **Missing Dependencies:**
+        ```bash
+        pip install diffusers torch transformers accelerate
+        ```
+        
+        **For Streamlit Cloud deployment, add to requirements.txt:**
+        ```
+        diffusers>=0.21.0
+        torch>=2.0.0
+        transformers>=4.30.0
+        accelerate>=0.20.0
+        ```
+        """)
+        
+        st.info("💡 After installing dependencies, restart the application to enable image generation.")
         return
     
     # Handle selected prompt
@@ -866,7 +936,7 @@ def render_image_mode():
                 else:
                     st.error(f"❌ Failed to generate image: {result}")
                     if "not available" in str(result).lower():
-                        st.info("💡 Tip: Install diffusers with: `pip install diffusers torch`")
+                        st.info("💡 Tip: Add 'diffusers>=0.21.0' and 'torch>=2.0.0' to requirements.txt for Streamlit Cloud")
                     elif "memory" in str(result).lower():
                         st.info("💡 Tip: Try smaller image size (256x256) or restart the app")
                     else:
@@ -989,13 +1059,15 @@ def render_code_mode():
 def render_voice_mode():
     st.subheader("🎙️ Voice Chat")
     
-    if not lazy_import('sounddevice') or not lazy_import('soundfile'):
-        st.error("Voice chat requires sounddevice and soundfile. Install with: pip install sounddevice soundfile")
-        return
+    # Check if running on cloud
+    is_cloud = os.getenv('STREAMLIT_SHARING_MODE') or 'streamlit.io' in os.getenv('HOSTNAME', '')
     
     if not lazy_import('whisper'):
-        st.error("Voice chat requires whisper. Install with: pip install openai-whisper")
+        st.error("Voice chat requires whisper. Add 'openai-whisper>=20230314' to requirements.txt")
         return
+    
+    if is_cloud:
+        st.info("🌐 Running on Streamlit Cloud - Live recording disabled. Upload audio files instead.")
     
     # Audio file upload
     st.subheader("📁 Upload Audio File")
@@ -1037,6 +1109,7 @@ def render_voice_mode():
                         ])
                         
                         # Auto-save after voice chat
+                        save_gallery_data()
     
                     else:
                         st.error("❌ No speech detected or transcription failed")
@@ -1045,66 +1118,80 @@ def render_voice_mode():
                 st.error(f"❌ Audio processing failed: {str(e)}")
                 st.info("💡 Tip: Check if the audio file is valid and not corrupted. Supported formats: WAV, MP3, M4A, OGG")
     
-    # Live recording
-    st.subheader("🎤 Live Recording")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🎤 Start Recording", use_container_width=True, disabled=st.session_state.listening):
-            st.session_state.listening = True
-    
-    with col2:
-        if st.button("⏹️ Stop Recording", use_container_width=True, disabled=not st.session_state.listening):
-            st.session_state.listening = False
-    
-    if st.session_state.listening:
-        st.warning("🔴 Recording... Speak now!")
+    # Live recording (only for local deployment)
+    if not is_cloud:
+        st.subheader("🎤 Live Recording")
         
-        duration = 5
-        sample_rate = 16000
-        
-        try:
-            sd = lazy_import('sounddevice')
-            sf = lazy_import('soundfile')
+        if not lazy_import('sounddevice') or not lazy_import('soundfile'):
+            st.warning("Live recording requires: pip install sounddevice soundfile")
+        else:
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🎤 Start Recording", use_container_width=True, disabled=st.session_state.listening):
+                    st.session_state.listening = True
             
-            with st.spinner(f"Recording for {duration} seconds..."):
-                audio_data = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='float32')
-                sd.wait()
+            with col2:
+                if st.button("⏹️ Stop Recording", use_container_width=True, disabled=not st.session_state.listening):
+                    st.session_state.listening = False
+            
+            if st.session_state.listening:
+                st.warning("🔴 Recording... Speak now!")
                 
-                temp_path = f"temp_recording_{int(time.time())}.wav"
-                sf.write(temp_path, audio_data, sample_rate)
+                duration = 5
+                sample_rate = 16000
                 
-                st.session_state.listening = False
-                
-                with st.spinner("Processing speech..."):
-                    text = ai.speech_to_text(temp_path)
+                try:
+                    sd = lazy_import('sounddevice')
+                    sf = lazy_import('soundfile')
                     
-                    if text and text.strip():
-                        st.success("Speech processed successfully!")
-                        st.write(f"**You said:** {text}")
+                    with st.spinner(f"Recording for {duration} seconds..."):
+                        audio_data = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='float32')
+                        sd.wait()
                         
-                        with st.spinner("AI is responding..."):
-                            response = ai.chat(text)
-                            st.write(f"**AI Response:** {response}")
+                        temp_path = f"temp_recording_{int(time.time())}.wav"
+                        sf.write(temp_path, audio_data, sample_rate)
+                        
+                        st.session_state.listening = False
+                        
+                        with st.spinner("Processing speech..."):
+                            text = ai.speech_to_text(temp_path)
                             
-                            if lazy_import('gtts'):
-                                audio_buffer = ai.text_to_speech(response)
-                                if audio_buffer:
-                                    st.audio(audio_buffer, format='audio/mp3')
+                            if text and text.strip():
+                                st.success("Speech processed successfully!")
+                                st.write(f"**You said:** {text}")
+                                
+                                with st.spinner("AI is responding..."):
+                                    response = ai.chat(text)
+                                    st.write(f"**AI Response:** {response}")
+                                    
+                                    if lazy_import('gtts'):
+                                        audio_buffer = ai.text_to_speech(response)
+                                        if audio_buffer:
+                                            st.audio(audio_buffer, format='audio/mp3')
+                                
+                                st.session_state.chat_history.extend([
+                                    {"role": "user", "content": f"[Live Recording] {text}"},
+                                    {"role": "assistant", "content": response}
+                                ])
+                            else:
+                                st.warning("No speech detected. Please try again.")
                         
-                        st.session_state.chat_history.extend([
-                            {"role": "user", "content": f"[Live Recording] {text}"},
-                            {"role": "assistant", "content": response}
-                        ])
-                    else:
-                        st.warning("No speech detected. Please try again.")
-                
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-                
-        except Exception as e:
-            st.error(f"Recording failed: {str(e)}")
-            st.session_state.listening = False
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+                        
+                except Exception as e:
+                    st.error(f"Recording failed: {str(e)}")
+                    st.session_state.listening = False
+    else:
+        st.subheader("🎤 Live Recording")
+        st.info("🌐 Live recording is not available on Streamlit Cloud. Use file upload instead.")
+        st.markdown("""
+        **For live recording, run locally:**
+        ```bash
+        pip install sounddevice soundfile
+        streamlit run app.py
+        ```
+        """)
 
 def render_gallery_mode():
     st.subheader("🖼️ Content Gallery")
