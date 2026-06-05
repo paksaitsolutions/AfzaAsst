@@ -1,0 +1,21 @@
+# Core Streamlit
+streamlit>=1.28.0
+
+# AI and ML
+transformers>=4.30.0
+torch>=2.0.0
+diffusers>=0.21.0
+accelerate>=0.20.0
+
+# Audio processing
+openai-whisper>=20230314
+gtts>=2.3.0
+
+# Image processing
+Pillow>=10.0.0
+
+# Utilities
+requests>=2.31.0
+
+# Optional: For better performance
+# xformers>=0.0.20  # Uncomment for GPU acceleration

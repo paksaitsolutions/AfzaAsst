@@ -1,0 +1,12 @@
+# Streamlit Cloud Optimized (fits in 2.7GB)
+streamlit>=1.28.0
+transformers>=4.30.0
+torch>=2.0.0
+Pillow>=10.0.0
+openai-whisper>=20230314
+gtts>=2.3.0
+requests>=2.31.0
+
+# Optional: Only if space allows
+# diffusers>=0.21.0  # 1.2GB for image generation
+# accelerate>=0.20.0
